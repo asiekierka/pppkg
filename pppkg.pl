@@ -4,6 +4,7 @@
 use File::Temp qw(tempfile tempdir);
 use Archive::Tar;
 use File::Path qw(make_path remove_tree);
+use File::Copy;
 # Additional
 use JSON;
 use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error);
@@ -28,6 +29,12 @@ sub cmd_help {
 	print "\n";
 }
 
+sub hardlink_copy {
+	my ($src, $dest) = @_;
+	# Screw the Perl ways! Bash on it!
+	chdir $src;
+	my @files = `find *`;
+}
 sub cmd_install {
 	my ($package, $verbose, $force) = @_;
 	print "Installing package " . $package . "...\n";
@@ -48,6 +55,7 @@ sub cmd_install {
 	foreach $line (<FILE>) { $fh_text .= $line; };
 	close(FILE);
 	my $package_info = decode_json($fh_text);
+	my $pkgname = $package_info->{meta}->{name} . "-" . $package_info->{meta}->{version};
 	unless(-d "root")
 	{
 		print "Compiling...\n";
@@ -55,6 +63,16 @@ sub cmd_install {
 		system(("./" . $package_info->{package}->{script}, $tempdir . "/root/")) == 0
 			or die_error("Compilation failed: $?",6);
 	}
+	print "Moving package...\n";
+	unless(-d ($prefix . "var")){mkdir ($prefix."var");}
+	unless(-d ($prefix . "var/pkg")){mkdir ($prefix."var/pkg");}
+	unless(-d ($prefix . "var/pkg/".$pkgname)){mkdir ($prefix."var/pkg/".$pkgname);}
+	# Should be more portable, really. But who'll want to install this on Windows?
+	system("mv ".$tempdir."/* ".$prefix."var/pkg/".$pkgname)
+	unless(-d ($prefix . "var/pkg/".$pkgname."/root")){	die_error("Moving failed: $?",7); }
+	print "Installing files...\n";
+	hardlink_copy($prefix."var/pkg/".$pkgname."/root/", $prefix);
+	print "Package " . $pkgname . " installed!\n";
 	exit(0);
 }
 
