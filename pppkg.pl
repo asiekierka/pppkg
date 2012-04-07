@@ -33,7 +33,7 @@ sub cmd_install {
 	print "Installing package " . $package . "...\n";
 	unless(-e $package) { die_error("File doesn't exist",3); }
 	if($verbose>=2) { print "Creating tempdir...\n"; }
-	$tempdir = tempdir("pppkg-XXXXXXXX", CLEANUP => 0);	
+	$tempdir = tempdir("/tmp/pkgist-XXXXXXXX", CLEANUP => 0);	
 	if($verbose>=1) { print "Unpacking package...\n"; }
 	$temparch = $tempdir . "/pkg.tar";
 	bunzip2 $package => $temparch
@@ -41,10 +41,19 @@ sub cmd_install {
 	chdir $tempdir;
 	Archive::Tar->extract_archive("pkg.tar")
 		or die_error("[TAR]",4);
+	print "Reading package...\n";
+	open(FILE,"<","info.json")
+		or die_error("Could not read package!",5);
+	my $fh_text = "";
+	foreach $line (<FILE>) { $fh_text .= $line; };
+	close(FILE);
+	my $package_info = decode_json($fh_text);
 	unless(-d "root")
 	{
-		print "Compiling...";
+		print "Compiling...\n";
 		mkdir "root" or die_error("Couldn't create directory",5);
+		system(("./" . $package_info->{package}->{script}, $tempdir . "/root/")) == 0
+			or die_error("Compilation failed: $?",6);
 	}
 	exit(0);
 }
