@@ -30,10 +30,18 @@ sub cmd_help {
 }
 
 sub hardlink_copy {
-	my ($src, $dest) = @_;
+	my ($src, $dest, $verbose) = @_;
 	# Screw the Perl ways! Bash on it!
+	open(FILELIST, ">filelist") || die_error("Cannot create filelist!",8);
 	chdir $src;
 	my @files = `find *`;
+	foreach $file (@files) {
+		print FILELIST $file;
+		$file=~s/\n//g;
+		if($verbose>=2) { print $dest.$file . "\n"; }
+		system("ln ".$src.$file." ".$dest.$file);
+	}
+	close(FILELIST);
 }
 sub cmd_install {
 	my ($package, $verbose, $force) = @_;
@@ -63,15 +71,16 @@ sub cmd_install {
 		system(("./" . $package_info->{package}->{script}, $tempdir . "/root/")) == 0
 			or die_error("Compilation failed: $?",6);
 	}
-	print "Moving package...\n";
+	if($verbose>=1) { print "Moving package...\n"; }
 	unless(-d ($prefix . "var")){mkdir ($prefix."var");}
 	unless(-d ($prefix . "var/pkg")){mkdir ($prefix."var/pkg");}
 	unless(-d ($prefix . "var/pkg/".$pkgname)){mkdir ($prefix."var/pkg/".$pkgname);}
 	# Should be more portable, really. But who'll want to install this on Windows?
-	system("mv ".$tempdir."/* ".$prefix."var/pkg/".$pkgname)
-	unless(-d ($prefix . "var/pkg/".$pkgname."/root")){	die_error("Moving failed: $?",7); }
+	system("mv ".$tempdir."/* ".$prefix."var/pkg/".$pkgname);
+	my $rootdir = $prefix . "var/pkg/".$pkgname."/root";
+	unless(-d $rootdir){ die_error("Moving failed: $?",7); }
 	print "Installing files...\n";
-	hardlink_copy($prefix."var/pkg/".$pkgname."/root/", $prefix);
+	hardlink_copy($rootdir."/", $prefix, $verbose);
 	print "Package " . $pkgname . " installed!\n";
 	exit(0);
 }
@@ -80,7 +89,7 @@ my $argv_len = @ARGV;
 my $args = 0;
 my $command = "nope";
 my $package = "";
-my $verbose = 2;
+my $verbose = 0;
 my $force = 0;
 
 # TODO: Make a better argparser.
