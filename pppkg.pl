@@ -10,8 +10,7 @@ use JSON;
 use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error);
 
 my $package_ext = ".ppk";
-#my $prefix = "/";
-my $prefix = "/home/asiekierka/asieman/fakeroot/";
+my $prefix = "/";
 
 sub die_error {
 	my $text = shift;
