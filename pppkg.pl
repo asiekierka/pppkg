@@ -20,9 +20,9 @@ my $package_ext = ".ppk";
 my $verbose = 0;
 my $force = 0;
 my $compile = 0;
-#my $prefix = "/";
-my $prefix = "/home/asiekierka/asieman/fakeroot/";
+my $prefix = "/";
 my $db;
+my $config;
 
 # SUBROUTINES
 sub die_error {
@@ -68,6 +68,22 @@ sub read_filelist {
 }
 sub readJSON {
 	my $filename = shift;
+	my $f = open(FILE, "<", $filename)
+		or die_error("Could not read JSON file!",5);
+	my $fh_text = "";
+	foreach $line (<FILE>) { $fh_text .= $line; };
+	close(FILE);
+	return decode_json($fh_text);
+}
+sub writeJSON {
+	my ($filename,$data) = @_;
+	my $f = open(FILE, ">", $filename)
+		or die_error("Could not write JSON file!",5);
+	print FILE encode_json($data);
+	close(FILE);
+}
+sub readJSONC {
+	my $filename = shift;
 	my $f = new IO::Uncompress::Gunzip $filename
 		or die_error("Could not read JSON file!",5);
 	my $fh_text = "";
@@ -75,7 +91,7 @@ sub readJSON {
 	close($f);
 	return decode_json($fh_text);
 }
-sub writeJSON {
+sub writeJSONC {
 	my ($filename,$data) = @_;
 	my $f = new IO::Compress::Gzip $filename
 		or die_error("Could not write JSON file!",5);
@@ -125,7 +141,7 @@ sub db_removepkg {
 	}
 }
 sub db_update {
-	writeJSON($prefix."var/pkg/db.json",$db);
+	writeJSONC($prefix."var/pkg/db.json",$db);
 }
 # COMMANDS
 sub cmd_help {
@@ -210,7 +226,7 @@ sub cmd_install {
 		print "Compiling...\n";
 		if(-d "root") { rmtree("root") or die_error("Couldn't remove rootdir!",5); }
 		mkdir "root" or die_error("Couldn't create directory",5);
-		system(("./" . $package_info->{package}->{script}, $tempdir . "/root/")) == 0
+		system(($config->{flags} . " ./" . $package_info->{package}->{script}, $tempdir . "/root/")) == 0
 			or die_error("Compilation failed: $?",6);
 	}
 	if($verbose>=1) { print "Moving package...\n"; }
@@ -251,6 +267,12 @@ for(;$args<$argv_len;$args++)
 			$package = $ARGV[$args+1];
 			$args++;
 		} else { die_error("Package not specified.",2); }
+	} elsif($ARGV[$args] eq "-Ri") {
+		if($args<($argv_len-1)) {
+			$command = "reinstall";
+			$package = $ARGV[$args+1];
+			$args++;
+		} else { die_error("Package not specified.",2); }
 	} elsif($ARGV[$args] eq "-P") {
 		if($args<($argv_len-1)) {
 			$prefix = $ARGV[$args+1];
@@ -272,21 +294,28 @@ for(;$args<$argv_len;$args++)
 
 # Make directories that may be needed.
 unless(-d ($prefix . "var")){mkdir ($prefix."var");}
+unless(-d ($prefix . "etc")){mkdir ($prefix."etc");}
 unless(-d ($prefix . "var/pkg")){mkdir ($prefix."var/pkg");}
 unless(-d ($prefix . "var/pkg/files")){mkdir ($prefix."var/pkg/files");}
 # Create empty DB if needed.
 unless(-f ($prefix . "var/pkg/db.json")){
-	my $db = {};
+	$db = {};
 	$db->{packages} = {};
 	$db->{providers} = {};
 	$db->{files} = {};
-	writeJSON($prefix."var/pkg/db.json",$db);
+	writeJSONC($prefix."var/pkg/db.json",$db);
+}
+unless(-f ($prefix . "etc/pppkg.json")){
+	$config = {};
+	$config->{flags} = "";
+	writeJSON($prefix."etc/pppkg.json",$config);
 }
 # Commands.
 if($command ne "nope")
 {
-	print "Loading database...";
-	$db = readJSON($prefix . "var/pkg/db.json");
+	print "Loading config/database...";
+	$config = readJSON($prefix . "etc/pppkg.json");
+	$db = readJSONC($prefix . "var/pkg/db.json");
 	print " complete\n";	
 }
 if($command eq "install") { cmd_install(); }
