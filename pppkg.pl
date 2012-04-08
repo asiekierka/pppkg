@@ -26,6 +26,7 @@ sub cmd_help {
 	print "\t-h\t\tHelp\n\t-i [pkg" . $package_ext . "]\tInstall package file\n";
 	print "\t-r [pkg-name]\tRemove package (UNFINISHED)\n";
 	print "\t-v\t\tVerbose\n\t-f\t\tForce\n\t\-P [prefix]\tPrefix folder\n";
+	print "\t-C\t\tPrefer compiling.\n";
 	print "\n";
 }
 
@@ -97,7 +98,7 @@ sub cmd_uninstall {
 	print "Package ".$package." uninstalled successfully!\n";
 }
 sub cmd_install {
-	my ($package, $verbose, $force) = @_;
+	my ($package, $verbose, $force, $compile) = @_;
 	print "Installing package " . $package . "...\n";
 	unless(-e $package) { $package=$package.$package_ext;
 		unless(-e $package) { die_error("File doesn't exist",3); }
@@ -112,13 +113,15 @@ sub cmd_install {
 	unlink("pkg.tar");
 	print "Reading package...\n";
 	my $package_info = readJSON("info.json");
+	my $can_source = ($package_info->{package}->{script} ne "");
 	my $pkgname = $package_info->{meta}->{name};
 	my $pkgdir = $prefix."var/pkg/".$pkgname;
 	my $rootdir = $pkgdir."/root";
 	if(-d $rootdir){ die_error("The package is already installed! Uninstall it first.",8); }
-	unless(-d "root")
+	if(!(-d "root") or ($compile==1 and $can_source))
 	{
 		print "Compiling...\n";
+		if(-d "root") { rmtree("root") or die_error("Couldn't remove rootdir!",5); }
 		mkdir "root" or die_error("Couldn't create directory",5);
 		system(("./" . $package_info->{package}->{script}, $tempdir . "/root/")) == 0
 			or die_error("Compilation failed: $?",6);
@@ -144,6 +147,7 @@ my $command = "nope";
 my $package = "";
 my $verbose = 0;
 my $force = 0;
+my $compile = 0;
 
 # TODO: Make a better argparser.
 for(;$args<$argv_len;$args++)
@@ -172,12 +176,14 @@ for(;$args<$argv_len;$args++)
 		$verbose+=1;
 	} elsif($ARGV[$args] eq "-f") {
 		$force=1;
+	} elsif($ARGV[$args] eq "-C") {
+		$compile=1;
 	} elsif($ARGV[$args] eq "chimicherry") {
 		print "Cherrychanga!\n";
 		exit(0);
 	}
 }
 
-if($command eq "install") { cmd_install($package,$verbose,$force); }
+if($command eq "install") { cmd_install($package,$verbose,$force,$compile); }
 elsif($command eq "remove") { cmd_uninstall($package,$verbose,$force); }
 else { die_error("No command specified.\nUse -h for help."); }
