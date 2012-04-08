@@ -1,8 +1,8 @@
 #!/usr/bin/perl
 
-use Data::Dumper;
 use warnings;
 
+# DEPENDENCIES
 # Builtin
 use File::Temp qw(tempfile tempdir);
 use Archive::Tar;
@@ -12,30 +12,25 @@ use File::Path qw(rmtree);
 use JSON;
 use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error);
 
+# VARIABLES
+my $package = "";
 my $package_ext = ".ppk";
+my $verbose = 0;
+my $force = 0;
+my $compile = 0;
 my $prefix = "/";
 my $db;
 
+# SUBROUTINES
 sub die_error {
 	my $text = shift;
 	my $code = shift;
-	if($code < 1) { $code=1; }
+	if(!defined($code) or $code < 1) { $code=1; }
 	print "[ERROR] " . $text . "\n";
 	exit($code);
 }
-
-sub cmd_help {
-	print "\n[ Portable(-ish) Perl PacKaGist 0.1 ]\n";
-	print "Options:\n";
-	print "\t-h\t\tHelp\n\t-i [pkg" . $package_ext . "]\tInstall package file\n";
-	print "\t-r [pkg-name]\tRemove package (UNFINISHED)\n";
-	print "\t-v\t\tVerbose\n\t-f\t\tForce\n\t\-P [prefix]\tPrefix folder\n";
-	print "\t-C\t\tPrefer compiling.\n\t-l\t\tList installed packages.";
-	print "\n";
-}
-
 sub hardlink_copy {
-	my ($src, $dest, $verbose, $force) = @_;
+	my ($src, $dest) = @_;
 	# Screw the Perl ways! Bash on it!
 	open(FILELIST, ">","filelist")
 		or die_error("Cannot create filelist!",8);
@@ -46,11 +41,24 @@ sub hardlink_copy {
 		$file=~s/\n//g;
 		if($verbose>=2) { print $dest.$file . "\n"; }
 		if(-f $src.$file) {
+			if(-f $dest.$file) { unlink $dest.$file; print "Overwriting " . $file . "!\n"; }
 			$errcode = system("ln ".$src.$file." ".$dest.$file);
 			unless($errcode==0) { if($force<1) { print "[WARNING] Error while hardlinking " . $file . "!\n"; } }
 		} elsif(-d $src.$file) {
 			unless(-d ($dest.$file)) {mkdir ($dest.$file);}
 		}
+	}
+	close(FILELIST);
+	return @files;
+}
+sub read_filelist {
+	my ($fn) = @_;
+	open(FILELIST, "<",$fn)
+		or die_error("Cannot read filelist!",8);
+	my @files = ();
+	foreach $file(<FILELIST>) {
+		$file=~s/\n//g;
+		push(@files,$file);
 	}
 	close(FILELIST);
 	return @files;
@@ -71,20 +79,62 @@ sub writeJSON {
 	print FILE encode_json($data);
 	close(FILE);
 }
+# DATABASE
 sub db_addpkg {
 	my ($info, @filelist) = @_;
 	$db->{packages}->{($info->{meta}->{name})} = $info;
-	# TODO: Filelist.
+	foreach $file (@filelist) {
+		if(defined($db->{files}->{$file})) {
+			push($db->{files}->{$file},$info->{meta}->{name});
+		} else {
+			$db->{files}->{$file} = [$info->{meta}->{name}];
+		}
+	}
 }
 sub db_removepkg {
-	my ($name) = @_;
+	my ($name,@files) = @_;
 	delete $db->{packages}->{$name};
+	foreach $file (@files) {
+		if(defined($db->{files}->{$file})) {
+			my $arr = $db->{files}->{$file};
+			my $arrlen = @{$arr};
+			my $i = 0;
+			for(;$i<$arrlen;$i++) {
+				if(@{$arr}[$i] eq $name) {
+					splice($arr,$i,1);
+					$arrlen--;
+					last;
+				}
+			}
+			if($arrlen<1) { delete $db->{files}->{$file}; }
+			else {
+				my $last_app=@{$arr}[$arrlen-1];
+				if($last_app ne $name) {
+					$src = $prefix."var/pkg/files/".$last_app."/root/";
+					if(-f $src.$file) {
+						if(-f $prefix.$file) { unlink($prefix.$file); }
+						$errcode = system("ln ".$src.$file." ".$prefix.$file);
+						unless($errcode==0) { print "[WARNING] Couldn't hardlink file ".$file."!"; }
+					}
+				}
+			}
+		}
+	}
 }
 sub db_update {
 	writeJSON($prefix."var/pkg/db.json",$db);
 }
+# COMMANDS
+sub cmd_help {
+	print "\n[ Portable(-ish) Perl PacKaGist 0.1 ]\n";
+	print "Options:\n";
+	print "\t-h\t\tHelp\n\t-i [pkg" . $package_ext . "]\tInstall package file\n";
+	print "\t-r [pkg-name]\tRemove package\n\t-l\t\tList installed packages.\n";
+	print "\t-v\t\tVerbose\n\t-f\t\tForce (unfinished)\n\t\-P [prefix]\tPrefix folder\n";
+	print "\t-C\t\tPrefer compiling.";
+	print "\n";
+}
 sub cmd_list {
-	my ($verbose) = @_;
 	my $i = 0;
 	for my $key (sort keys %{$db->{packages}})
 	{
@@ -95,7 +145,6 @@ sub cmd_list {
 	print $i . " packages total.\n";
 }
 sub cmd_uninstall {
-	my ($package, $verbose, $force) = @_;
 	my $pkgdir = $prefix."var/pkg/files/".$package;
 	# Abuse the fact that the filelist is generated during the hardlinking.
 	unless(-e $pkgdir."/filelist"){ die_error("Package " . $package . " isn't installed!"); }
@@ -128,14 +177,13 @@ sub cmd_uninstall {
 		}
 	}
 	if($verbose>=1) { print "Removing package...\n"; }
-	rmtree($pkgdir)
-		or die_error("Couldn't remove package!",10);
-	db_removepkg($package);
+	db_removepkg($package,read_filelist($pkgdir."/filelist"));
 	db_update();
+	rmtree($pkgdir)
+		or die_error("Couldn't finalize package removal!",10);
 	print "Package ".$package." uninstalled successfully!\n";
 }
 sub cmd_install {
-	my ($package, $verbose, $force, $compile) = @_;
 	print "Installing package " . $package . "...\n";
 	unless(-e $package) { $package=$package.$package_ext;
 		unless(-e $package) { die_error("File doesn't exist",3); }
@@ -180,10 +228,7 @@ sub cmd_install {
 my $argv_len = @ARGV;
 my $args = 0;
 my $command = "nope";
-my $package = "";
-my $verbose = 0;
-my $force = 0;
-my $compile = 0;
+
 
 # TODO: Make a better argparser.
 for(;$args<$argv_len;$args++)
@@ -241,7 +286,7 @@ if($command ne "nope")
 	$db = readJSON($prefix . "var/pkg/db.json");
 	print " complete\n";	
 }
-if($command eq "install") { cmd_install($package,$verbose,$force,$compile); }
-elsif($command eq "remove") { cmd_uninstall($package,$verbose,$force); }
-elsif($command eq "list") { cmd_list($verbose); }
+if($command eq "install") { cmd_install(); }
+elsif($command eq "remove") { cmd_uninstall(); }
+elsif($command eq "list") { cmd_list(); }
 else { die_error("No command specified.\nUse -h for help."); }
