@@ -1,5 +1,8 @@
 #!/usr/bin/perl
 
+use Data::Dumper;
+use warnings;
+
 # Builtin
 use File::Temp qw(tempfile tempdir);
 use Archive::Tar;
@@ -11,6 +14,7 @@ use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error);
 
 my $package_ext = ".ppk";
 my $prefix = "/";
+my $db;
 
 sub die_error {
 	my $text = shift;
@@ -26,7 +30,7 @@ sub cmd_help {
 	print "\t-h\t\tHelp\n\t-i [pkg" . $package_ext . "]\tInstall package file\n";
 	print "\t-r [pkg-name]\tRemove package (UNFINISHED)\n";
 	print "\t-v\t\tVerbose\n\t-f\t\tForce\n\t\-P [prefix]\tPrefix folder\n";
-	print "\t-C\t\tPrefer compiling.\n";
+	print "\t-C\t\tPrefer compiling.\n\t-l\t\tList installed packages.";
 	print "\n";
 }
 
@@ -49,6 +53,7 @@ sub hardlink_copy {
 		}
 	}
 	close(FILELIST);
+	return @files;
 }
 sub readJSON {
 	my $filename = shift;
@@ -59,9 +64,39 @@ sub readJSON {
 	close(FILE);
 	return decode_json($fh_text);
 }
+sub writeJSON {
+	my ($filename,$data) = @_;
+	open(FILE,">",$filename)
+		or die_error("Could not write JSON file!",5);
+	print FILE encode_json($data);
+	close(FILE);
+}
+sub db_addpkg {
+	my ($info, @filelist) = @_;
+	$db->{packages}->{($info->{meta}->{name})} = $info;
+	# TODO: Filelist.
+}
+sub db_removepkg {
+	my ($name) = @_;
+	delete $db->{packages}->{$name};
+}
+sub db_update {
+	writeJSON($prefix."var/pkg/db.json",$db);
+}
+sub cmd_list {
+	my ($verbose) = @_;
+	my $i = 0;
+	for my $key (sort keys %{$db->{packages}})
+	{
+		my $entry = $db->{packages}->{$key};
+		print $entry->{meta}->{name} . "-" . $entry->{meta}->{version} . " [". $entry->{meta}->{description} ."]\n";
+		$i++;
+	}
+	print $i . " packages total.\n";
+}
 sub cmd_uninstall {
 	my ($package, $verbose, $force) = @_;
-	my $pkgdir = $prefix."var/pkg/".$package;
+	my $pkgdir = $prefix."var/pkg/files/".$package;
 	# Abuse the fact that the filelist is generated during the hardlinking.
 	unless(-e $pkgdir."/filelist"){ die_error("Package " . $package . " isn't installed!"); }
 	print "Removing package " . $package . "...\n";
@@ -95,6 +130,8 @@ sub cmd_uninstall {
 	if($verbose>=1) { print "Removing package...\n"; }
 	rmtree($pkgdir)
 		or die_error("Couldn't remove package!",10);
+	db_removepkg($package);
+	db_update();
 	print "Package ".$package." uninstalled successfully!\n";
 }
 sub cmd_install {
@@ -113,12 +150,11 @@ sub cmd_install {
 	unlink("pkg.tar");
 	print "Reading package...\n";
 	my $package_info = readJSON("info.json");
-	my $can_source = ($package_info->{package}->{script} ne "");
 	my $pkgname = $package_info->{meta}->{name};
-	my $pkgdir = $prefix."var/pkg/".$pkgname;
+	my $pkgdir = $prefix."var/pkg/files/".$pkgname;
 	my $rootdir = $pkgdir."/root";
 	if(-d $rootdir){ die_error("The package is already installed! Uninstall it first.",8); }
-	if(!(-d "root") or ($compile==1 and $can_source))
+	if(!(-d "root") or ($compile==1 and ($package_info->{package}->{script} ne "")))
 	{
 		print "Compiling...\n";
 		if(-d "root") { rmtree("root") or die_error("Couldn't remove rootdir!",5); }
@@ -127,8 +163,6 @@ sub cmd_install {
 			or die_error("Compilation failed: $?",6);
 	}
 	if($verbose>=1) { print "Moving package...\n"; }
-	unless(-d ($prefix . "var")){mkdir ($prefix."var");}
-	unless(-d ($prefix . "var/pkg")){mkdir ($prefix."var/pkg");}
 	unless(-d ($pkgdir)){mkdir ($pkgdir);}
 	# Should be more portable, really. But who'll want to install this on Windows?
 	# Is that even possible?
@@ -136,7 +170,9 @@ sub cmd_install {
 	unless(-d $rootdir){ die_error("Moving failed: $?",7); }
 	print "Installing files...\n";
 	chdir $pkgdir;
-	hardlink_copy($rootdir."/", $prefix, $verbose, $force);
+	my @filelist = hardlink_copy($rootdir."/", $prefix, $verbose, $force);
+	db_addpkg($package_info,@filelist);
+	db_update();
 	print "Package " . $pkgname . " installed!\n";
 	exit(0);
 }
@@ -172,6 +208,8 @@ for(;$args<$argv_len;$args++)
 			$prefix = $ARGV[$args+1];
 			$args++;
 		} else { die_error("Prefix not specified.",2); }
+	} elsif($ARGV[$args] eq "-l") {
+		$command = "list";
 	} elsif($ARGV[$args] eq "-v") {
 		$verbose+=1;
 	} elsif($ARGV[$args] eq "-f") {
@@ -184,6 +222,26 @@ for(;$args<$argv_len;$args++)
 	}
 }
 
+# Make directories that may be needed.
+unless(-d ($prefix . "var")){mkdir ($prefix."var");}
+unless(-d ($prefix . "var/pkg")){mkdir ($prefix."var/pkg");}
+unless(-d ($prefix . "var/pkg/files")){mkdir ($prefix."var/pkg/files");}
+# Create empty DB if needed.
+unless(-f ($prefix . "var/pkg/db.json")){
+	my $db = {};
+	$db->{packages} = {};
+	$db->{providers} = {};
+	$db->{files} = {};
+	writeJSON($prefix."var/pkg/db.json",$db);
+}
+# Commands.
+if($command ne "nope")
+{
+	print "Loading database...";
+	$db = readJSON($prefix . "var/pkg/db.json");
+	print " complete\n";	
+}
 if($command eq "install") { cmd_install($package,$verbose,$force,$compile); }
 elsif($command eq "remove") { cmd_uninstall($package,$verbose,$force); }
+elsif($command eq "list") { cmd_list($verbose); }
 else { die_error("No command specified.\nUse -h for help."); }
