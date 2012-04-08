@@ -226,7 +226,7 @@ sub cmd_install {
 		print "Compiling...\n";
 		if(-d "root") { rmtree("root") or die_error("Couldn't remove rootdir!",5); }
 		mkdir "root" or die_error("Couldn't create directory",5);
-		system(($config->{flags} . " ./" . $package_info->{package}->{script}, $tempdir . "/root/")) == 0
+		system(($config->{flags} . " ./" . $package_info->{package}->{script} . " " . $tempdir . "/root/")) == 0
 			or die_error("Compilation failed: $?",6);
 	}
 	if($verbose>=1) { print "Moving package...\n"; }
