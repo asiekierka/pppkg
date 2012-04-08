@@ -41,8 +41,12 @@ sub hardlink_copy {
 		print FILELIST $file;
 		$file=~s/\n//g;
 		if($verbose>=2) { print $dest.$file . "\n"; }
-		$errcode = system("ln ".$src.$file." ".$dest.$file);
-		unless($errcode==0) { if($force<1) { print "[WARNING] Error while hardlinking " . $file . "!\n"; } }
+		if(-f $src.$file) {
+			$errcode = system("ln ".$src.$file." ".$dest.$file);
+			unless($errcode==0) { if($force<1) { print "[WARNING] Error while hardlinking " . $file . "!\n"; } }
+		} elsif(-d $src.$file) {
+			unless(-d ($dest.$file)) {mkdir ($dest.$file);}
+		}
 	}
 	close(FILELIST);
 }
@@ -96,7 +100,7 @@ sub cmd_uninstall {
 sub cmd_install {
 	my ($package, $verbose, $force) = @_;
 	print "Installing package " . $package . "...\n";
-	unless(-e $package) { $package=$package.".ppk";
+	unless(-e $package) { $package=$package.$package_ext;
 		unless(-e $package) { die_error("File doesn't exist",3); }
 	}
 	if($verbose>=2) { print "Creating tempdir...\n"; }
