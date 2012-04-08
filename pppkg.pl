@@ -8,6 +8,8 @@ use File::Temp qw(tempfile tempdir);
 use Archive::Tar;
 use File::Copy;
 use File::Path qw(rmtree);
+use IO::Compress::Gzip;
+use IO::Uncompress::Gunzip;
 # Additional
 use JSON;
 use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error);
@@ -18,7 +20,8 @@ my $package_ext = ".ppk";
 my $verbose = 0;
 my $force = 0;
 my $compile = 0;
-my $prefix = "/";
+#my $prefix = "/";
+my $prefix = "/home/asiekierka/asieman/fakeroot/";
 my $db;
 
 # SUBROUTINES
@@ -65,19 +68,19 @@ sub read_filelist {
 }
 sub readJSON {
 	my $filename = shift;
-	open(FILE,"<",$filename)
+	my $f = new IO::Uncompress::Gunzip $filename
 		or die_error("Could not read JSON file!",5);
 	my $fh_text = "";
-	foreach $line (<FILE>) { $fh_text .= $line; };
-	close(FILE);
+	foreach $line (<$f>) { $fh_text .= $line; };
+	close($f);
 	return decode_json($fh_text);
 }
 sub writeJSON {
 	my ($filename,$data) = @_;
-	open(FILE,">",$filename)
+	my $f = new IO::Compress::Gzip $filename
 		or die_error("Could not write JSON file!",5);
-	print FILE encode_json($data);
-	close(FILE);
+	print $f encode_json($data);
+	close($f);
 }
 # DATABASE
 sub db_addpkg {
