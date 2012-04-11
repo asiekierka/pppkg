@@ -213,8 +213,8 @@ sub cmd_uninstall {
 }
 sub cmd_install {
 	print "Installing package " . $package . "...\n";
-	unless(-e $package) { $package=$package.$package_ext;
-		unless(-e $package) { die_error("File doesn't exist",3); }
+	unless(-f $package) { $package=$package.$package_ext;
+		unless(-f $package) { die_error("File doesn't exist",3); }
 	}
 	if($verbose>=2) { print "Creating tempdir...\n"; }
 	$tempdir = tempdir("/tmp/pkgist-XXXXXXXX", CLEANUP => ($verbose>1?0:1));	
