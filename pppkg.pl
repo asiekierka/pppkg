@@ -2,6 +2,9 @@
 
 use warnings;
 
+# ERRORCODES:
+# 1 - general, 2 - commands, 3 - file doesn't exist, 4 - unpacking error, 5 - JSON error,
+# 6 - compile error, 7 - move error, 8 - filelist error, 9 - unlink error, 10 - removal finalize error, 11 - package is installed
 # DEPENDENCIES
 # Builtin
 use File::Temp qw(tempfile tempdir);
@@ -20,6 +23,7 @@ my $package_ext = ".ppk";
 my $verbose = 0;
 my $force = 0;
 my $compile = 0;
+my $mtime = 0;
 my $prefix = "/";
 my $db;
 my $config;
@@ -105,12 +109,14 @@ sub writeJSONC {
 # DATABASE
 sub db_addpkg {
 	my ($info, @filelist) = @_;
-	$db->{packages}->{($info->{meta}->{name})} = $info;
+	$pkgname =$info->{meta}->{name};
+	$db->{packages}->{$pkgname} = $info;
+	if($mtime>0) { $db->{packages}->{$pkgname}->{mtime} = $mtime; }
 	foreach $file (@filelist) {
 		if(defined($db->{files}->{$file})) {
-			push($db->{files}->{$file},$info->{meta}->{name});
+			push($db->{files}->{$file},$pkgname);
 		} else {
-			$db->{files}->{$file} = [$info->{meta}->{name}];
+			$db->{files}->{$file} = [$pkgname];
 		}
 	}
 }
@@ -223,7 +229,7 @@ sub cmd_install {
 	my $pkgname = $package_info->{meta}->{name};
 	my $pkgdir = $prefix."var/pkg/files/".$pkgname;
 	my $rootdir = $pkgdir."/root";
-	if(-d $rootdir){ die_error("The package is already installed! Uninstall it first.",8); }
+	if(-d $rootdir){ die_error("The package is already installed! Uninstall it first.",11); }
 	if(!(-d "root") or ($compile==1 and ($package_info->{package}->{script} ne "")))
 	{
 		print "Compiling...\n";
@@ -281,6 +287,11 @@ for(;$args<$argv_len;$args++)
 			$prefix = $ARGV[$args+1];
 			$args++;
 		} else { die_error("Prefix not specified.",2); }
+	} elsif($ARGV[$args] eq "--set_mtime") {
+		if($args<($argv_len-1)) {
+			$mtime = $ARGV[$args+1];
+			$args++;
+		} 
 	} elsif($ARGV[$args] eq "-l") {
 		$command = "list";
 	} elsif($ARGV[$args] eq "-v") {
