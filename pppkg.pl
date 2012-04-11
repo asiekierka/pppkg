@@ -30,6 +30,7 @@ sub die_error {
 	my $code = shift;
 	if(!defined($code) or $code < 1) { $code=1; }
 	print "[ERROR] " . $text . "\n";
+	chdir("/");
 	exit($code);
 }
 sub hardlink_copy {
@@ -43,8 +44,11 @@ sub hardlink_copy {
 		print FILELIST $file;
 		$file=~s/\n//g;
 		if($verbose>=2) { print $dest.$file . "\n"; }
-		if(-f $src.$file) {
-			if(-f $dest.$file) { unlink $dest.$file; print "Overwriting " . $file . "!\n"; }
+		if(-f $dest.$file) { unlink $dest.$file; print "Overwriting " . $file . "!\n"; }
+		if(-l $src.$file) {
+			unless(-e ($dest.$file)) { symlink(readlink($src.$file),$dest.$file); }
+		}
+		elsif(-f $src.$file) {
 			$errcode = system("ln ".$src.$file." ".$dest.$file);
 			unless($errcode==0) { if($force<1) { print "[WARNING] Error while hardlinking " . $file . "!\n"; } }
 		} elsif(-d $src.$file) {
@@ -150,14 +154,13 @@ sub cmd_help {
 	print "\t-h\t\tHelp\n\t-i [pkg" . $package_ext . "]\tInstall package file\n";
 	print "\t-r [pkg-name]\tRemove package\n\t-l\t\tList installed packages.\n";
 	print "\t-v\t\tVerbose\n\t-f\t\tForce (unfinished)\n\t\-P [prefix]\tPrefix folder\n";
-	print "\t-C\t\tPrefer compiling.";
-	print "\n";
+	print "\t-C\t\tPrefer compiling.\n";
 }
 sub cmd_list {
 	my $i = 0;
 	for my $key (sort keys %{$db->{packages}})
 	{
-		my $entry = $db->{packages}->{$key};
+ 		my $entry = $db->{packages}->{$key};
 		print $entry->{meta}->{name} . "-" . $entry->{meta}->{version} . " [". $entry->{meta}->{description} ."]\n";
 		$i++;
 	}
@@ -208,7 +211,7 @@ sub cmd_install {
 		unless(-e $package) { die_error("File doesn't exist",3); }
 	}
 	if($verbose>=2) { print "Creating tempdir...\n"; }
-	$tempdir = tempdir("/tmp/pkgist-XXXXXXXX", CLEANUP => 0);	
+	$tempdir = tempdir("/tmp/pkgist-XXXXXXXX", CLEANUP => ($verbose>1?0:1));	
 	if($verbose>=1) { print "Unpacking package...\n"; }
 	$temparch = $tempdir . "/pkg.tar";
 	bunzip2 $package => $temparch or die_error("[BZIP2] ".$Bunzip2Error,4);
