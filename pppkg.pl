@@ -4,7 +4,8 @@ use warnings;
 
 # ERRORCODES:
 # 1 - general, 2 - commands, 3 - file doesn't exist, 4 - unpacking error, 5 - JSON error,
-# 6 - compile error, 7 - move error, 8 - filelist error, 9 - unlink error, 10 - removal finalize error, 11 - package is installed
+# 6 - compile error, 7 - move error, 8 - filelist error, 9 - unlink error, 10 - removal finalize error,
+# 11 - package is installed, 12 - repo not found
 # DEPENDENCIES
 # Builtin
 use File::Temp qw(tempfile tempdir);
@@ -13,11 +14,13 @@ use File::Copy;
 use File::Path qw(rmtree);
 use IO::Compress::Gzip;
 use IO::Uncompress::Gunzip;
+use Cwd;
 # Additional
 use JSON;
 use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error);
 
 # VARIABLES
+my $command = "nope";
 my $package = "";
 my $package_ext = ".ppk";
 my $verbose = 0;
@@ -48,7 +51,7 @@ sub hardlink_copy {
 		print FILELIST $file;
 		$file=~s/\n//g;
 		if($verbose>=2) { print $dest.$file . "\n"; }
-		if(-f $dest.$file) { unlink $dest.$file; print "Overwriting " . $file . "!\n"; }
+		if(-f $dest.$file) { unlink $dest.$file; if($command ne "reinstall"){ print "Overwriting " . $file . "!\n"; } }
 		if(-l $src.$file) {
 			unless(-e ($dest.$file)) { symlink(readlink($src.$file),$dest.$file); }
 		}
@@ -153,12 +156,21 @@ sub db_removepkg {
 sub db_update {
 	writeJSONC($prefix."var/pkg/db.json",$db);
 }
+sub unpack_pkg {
+	my ($src, $dest) = @_;
+	bunzip2 $src => $dest."/pkg.tar" or die_error("[BZIP2] ".$Bunzip2Error,4);
+	my $olddir = getcwd();
+	chdir $dest;
+	Archive::Tar->extract_archive("pkg.tar") or die_error("[TAR] An error!",4);
+	unlink("pkg.tar");
+	chdir $olddir;
+}
 # COMMANDS
 sub cmd_help {
 	print "\n[ Portable(-ish) Perl PacKaGist 0.1 ]\n";
 	print "Options:\n";
 	print "\t-h\t\tHelp\n\t-i [pkg" . $package_ext . "]\tInstall package file\n";
-	print "\t-r [pkg-name]\tRemove package\n\t-l\t\tList installed packages.\n";
+	print "\t-r [pkg-name]\tRemove package\n\t-Ri [pkg".$package_ext."]\tReinstall a package\n\t-l\t\tList installed packages.\n";
 	print "\t-v\t\tVerbose\n\t-f\t\tForce (unfinished)\n\t\-P [prefix]\tPrefix folder\n";
 	print "\t-C\t\tPrefer compiling.\n";
 }
@@ -217,19 +229,16 @@ sub cmd_install {
 		unless(-f $package) { die_error("File doesn't exist",3); }
 	}
 	if($verbose>=2) { print "Creating tempdir...\n"; }
-	$tempdir = tempdir("/tmp/pkgist-XXXXXXXX", CLEANUP => ($verbose>1?0:1));	
+	$tempdir = tempdir("/tmp/pkgist-XXXXXXXX", CLEANUP => ($verbose>1?0:1));
 	if($verbose>=1) { print "Unpacking package...\n"; }
-	$temparch = $tempdir . "/pkg.tar";
-	bunzip2 $package => $temparch or die_error("[BZIP2] ".$Bunzip2Error,4);
+	unpack_pkg($package,$tempdir);
 	chdir $tempdir;
-	Archive::Tar->extract_archive("pkg.tar") or die_error("[TAR] An error!",4);
-	unlink("pkg.tar");
 	print "Reading package...\n";
 	my $package_info = readJSON("info.json");
 	my $pkgname = $package_info->{meta}->{name};
 	my $pkgdir = $prefix."var/pkg/files/".$pkgname;
 	my $rootdir = $pkgdir."/root";
-	if(-d $rootdir){ die_error("The package is already installed! Uninstall it first.",11); }
+	if(-d $rootdir && $command ne "reinstall"){ die_error("The package is already installed! Uninstall it first.",11); }
 	if(!(-d "root") or ($compile==1 and ($package_info->{package}->{script} ne "")))
 	{
 		print "Compiling...\n";
@@ -239,14 +248,15 @@ sub cmd_install {
 			or die_error("Compilation failed: $?",6);
 	}
 	if($verbose>=1) { print "Moving package...\n"; }
-	unless(-d ($pkgdir)){mkdir ($pkgdir);}
 	# Should be more portable, really. But who'll want to install this on Windows?
 	# Is that even possible?
+	if($command eq "reinstall") { system("rm -rf ".$pkgdir); }
+	unless(-d ($pkgdir)){mkdir ($pkgdir);}
 	system("mv ".$tempdir."/* ".$pkgdir);
 	unless(-d $rootdir){ die_error("Moving failed: $?",7); }
 	print "Installing files...\n";
 	chdir $pkgdir;
-	my @filelist = hardlink_copy($rootdir."/", $prefix, $verbose, $force);
+	my @filelist = hardlink_copy($rootdir."/", $prefix);
 	db_addpkg($package_info,@filelist);
 	db_update();
 	print "Package " . $pkgname . " installed!\n";
@@ -255,7 +265,6 @@ sub cmd_install {
 
 my $argv_len = @ARGV;
 my $args = 0;
-my $command = "nope";
 
 
 # TODO: Make a better argparser.
@@ -291,9 +300,23 @@ for(;$args<$argv_len;$args++)
 		if($args<($argv_len-1)) {
 			$mtime = $ARGV[$args+1];
 			$args++;
-		} 
+		}
+	} elsif($ARGV[$args] eq "-d") {
+		if($args<($argv_len-1)) {
+			$command = "download";
+			$package = $ARGV[$args+1];
+			$args++;
+		} else { die_error("Package not specified.",2); }
+	} elsif($ARGV[$args] eq "-di") {
+		if($args<($argv_len-1)) {
+			$command = "di";
+			$package = $ARGV[$args+1];
+			$args++;
+		} else { die_error("Package not specified.",2); }
 	} elsif($ARGV[$args] eq "-l") {
 		$command = "list";
+	} elsif($ARGV[$args] eq "-u") {
+		$command = "update";
 	} elsif($ARGV[$args] eq "-v") {
 		$verbose+=1;
 	} elsif($ARGV[$args] eq "-f") {
@@ -332,7 +355,19 @@ if($command ne "nope")
 	$db = readJSONC($prefix . "var/pkg/db.json");
 	print " complete\n";	
 }
-if($command eq "install") { cmd_install(); }
+if($command eq "download" || $command eq "di")
+{
+	unless(-f ($prefix . "var/pkg/repo.json")) { die_error("Repo not found!",12); }
+	print "Loading repository...";
+	#$repo = readJSONC($prefix . "var/pkg/repo.json");
+	print " complete\n";
+}
+
+if($command eq "download") {
+
+} elsif($command eq "update") {
+
+} elsif($command eq "install" || $command eq "reinstall") { cmd_install(); }
 elsif($command eq "remove") { cmd_uninstall(); }
 elsif($command eq "list") { cmd_list(); }
 else { die_error("No command specified.\nUse -h for help."); }
