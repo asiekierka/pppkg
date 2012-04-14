@@ -3,9 +3,11 @@
 use warnings;
 
 # ERRORCODES:
-# 1 - general, 2 - commands, 3 - file doesn't exist, 4 - unpacking error, 5 - JSON error,
-# 6 - compile error, 7 - move error, 8 - filelist error, 9 - unlink error, 10 - removal finalize error,
-# 11 - package is installed, 12 - repo not found
+# 1 - general, 2 - commands, 3 - file doesn't exist,
+# 4 - unpacking error, 5 - JSON error,
+# 6 - script error, 7 - move error, 8 - filelist error,
+# 9 - unlink error, 10 - removal finalize error,
+# 11 - package is installed, 12 - repo not found.
 # DEPENDENCIES
 # Builtin
 use File::Temp qw(tempfile tempdir);
@@ -170,7 +172,7 @@ sub cmd_help {
 	print "\n[ Portable(-ish) Perl PacKaGist 0.1 ]\n";
 	print "Options:\n";
 	print "\t-h\t\tHelp\n\t-i [pkg" . $package_ext . "]\tInstall package file\n";
-	print "\t-r [pkg-name]\tRemove package\n\t-Ri [pkg".$package_ext."]\tReinstall a package\n\t-l\t\tList installed packages.\n";
+	print "\t-r [pkg-name]\tRemove package\n\t-l\t\tList installed packages.\n";
 	print "\t-v\t\tVerbose\n\t-f\t\tForce (unfinished)\n\t\-P [prefix]\tPrefix folder\n";
 	print "\t-C\t\tPrefer compiling.\n";
 }
@@ -189,6 +191,7 @@ sub cmd_uninstall {
 	# Abuse the fact that the filelist is generated during the hardlinking.
 	unless(-e $pkgdir."/filelist"){ die_error("Package " . $package . " isn't installed!"); }
 	print "Removing package " . $package . "...\n";
+	if(defined($package_info->{package}->{preuninstall})) { chdir $pkgdir; exec_script("./" . $package_info->{package}->{preuninstall}); }
 	if($verbose>=2) { print "Reading filelist...\n"; }
 	open(FILELIST, "<", $pkgdir."/filelist")
 		or die_error("Cannot open filelist!",5);
@@ -217,11 +220,18 @@ sub cmd_uninstall {
 		}
 	}
 	if($verbose>=1) { print "Removing package...\n"; }
+	if(defined($package_info->{package}->{postuninstall})) { chdir $pkgdir; exec_script("./" . $package_info->{package}->{postuninstall}); }
 	db_removepkg($package,read_filelist($pkgdir."/filelist"));
 	db_update();
+	chdir "/";
 	rmtree($pkgdir)
 		or die_error("Couldn't finalize package removal!",10);
 	print "Package ".$package." uninstalled successfully!\n";
+}
+sub exec_script {
+	my $name = shift;
+	system($name) == 0
+		or die_error("Running script failed: $?",6);
 }
 sub cmd_install {
 	print "Installing package " . $package . "...\n";
@@ -247,6 +257,7 @@ sub cmd_install {
 		system(($config->{flags} . " ./" . $package_info->{package}->{script} . " " . $tempdir . "/root/")) == 0
 			or die_error("Compilation failed: $?",6);
 	}
+	if(defined($package_info->{package}->{preinstall})) { exec_script("./" . $package_info->{package}->{preinstall}); }
 	if($verbose>=1) { print "Moving package...\n"; }
 	# Should be more portable, really. But who'll want to install this on Windows?
 	# Is that even possible?
@@ -257,6 +268,7 @@ sub cmd_install {
 	print "Installing files...\n";
 	chdir $pkgdir;
 	my @filelist = hardlink_copy($rootdir."/", $prefix);
+	if(defined($package_info->{package}->{postinstall})) { chdir $pkgdir; exec_script("./" . $package_info->{package}->{postinstall}); }
 	db_addpkg($package_info,@filelist);
 	db_update();
 	print "Package " . $pkgname . " installed!\n";
