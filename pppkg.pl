@@ -3,11 +3,10 @@
 use warnings;
 
 # ERRORCODES:
-# 1 - general, 2 - commands, 3 - file doesn't exist,
-# 4 - unpacking error, 5 - JSON error,
-# 6 - script error, 7 - move error, 8 - filelist error,
-# 9 - unlink error, 10 - removal finalize error,
-# 11 - package is installed, 12 - repo not found.
+# 1 - general, 2 - commands, 3 - file doesn't exist, 4 - unpacking error, 5 - JSON error,
+# 6 - compile error, 7 - move error, 8 - filelist error, 9 - unlink error, 10 - removal finalize error,
+# 11 - package is installed, 12 - repo not found, 13 - DL error, 14 - no package in DB,
+# 15 - deps error
 # DEPENDENCIES
 # Builtin
 use File::Temp qw(tempfile tempdir);
@@ -15,8 +14,9 @@ use Archive::Tar;
 use File::Copy;
 use File::Path qw(rmtree);
 use IO::Compress::Gzip;
-use IO::Uncompress::Gunzip;
+use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
 use Cwd;
+use HTTP::Tiny;
 # Additional
 use JSON;
 use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error);
@@ -24,7 +24,7 @@ use IO::Uncompress::Bunzip2 qw(bunzip2 $Bunzip2Error);
 # VARIABLES
 my $command = "nope";
 my $package = "";
-my $package_ext = ".ppk";
+my $package_ext= ".ppk";
 my $verbose = 0;
 my $force = 0;
 my $compile = 0;
@@ -32,8 +32,19 @@ my $mtime = 0;
 my $prefix = "/";
 my $db;
 my $config;
-
+my $http = HTTP::Tiny->new;
+my $dlprefix = "";
+my $dep_depth = 15;
 # SUBROUTINES
+sub download_file {
+	my ($url, $out) = @_;
+	my $f = open(FILE, ">", $out)
+		or die_error("Error opening file '".$out."' for writing!",13);
+	my $response = $http->get($url);
+	die_error("Errror download file '".$url."'!",13) unless $response->{success};
+	print FILE $response->{content};
+	close(FILE);
+}
 sub die_error {
 	my $text = shift;
 	my $code = shift;
@@ -111,6 +122,26 @@ sub writeJSONC {
 	print $f encode_json($data);
 	close($f);
 }
+sub is_installed {
+	my ($name) = @_;
+	return (exists($db->{packages}->{$name}) || exists($db->{providers}->{$name}));
+}
+sub check_dependencies {
+	my ($deps) = @_;
+	my @deparr = split(/ /,$deps);
+	my @neededdeps;
+	if($force>0) { return @neededdeps; } # That is, nothing.
+	foreach $dep (@deparr) {
+		if(!is_installed($dep)) { push(@neededdeps,$dep); }
+	}
+	return @neededdeps;
+}
+sub check_deps_die {
+	my ($deps) = @_;
+	my @n_deps = check_dependencies($deps);
+	my $n_dlen = @n_deps;
+	if($n_dlen>0) { die_error("Resolve dependencies first: ".join(', ',@n_deps),15); }
+}
 # DATABASE
 sub db_addpkg {
 	my ($info, @filelist) = @_;
@@ -124,10 +155,33 @@ sub db_addpkg {
 			$db->{files}->{$file} = [$pkgname];
 		}
 	}
+	my @provides = split(/ /, $info->{meta}->{provides});
+	foreach $pr (@provides) {
+                if(defined($db->{providers}->{$pr})) {
+                        push($db->{providers}->{$pr},$pkgname);
+                } else {
+                        $db->{providers}->{$pr} = [$pkgname];
+                }
+	}
 }
 sub db_removepkg {
 	my ($name,@files) = @_;
-	delete $db->{packages}->{$name};
+	my @provides = split(/ /, $db->{packages}->{$name}->{meta}->{provides});
+	foreach $pr (@provides) {
+                if(defined($db->{providers}->{$pr})) {
+			my $arr = $db->{providers}->{$pr};
+                	my $arrlen = @{$arr};
+                	my $i = 0;
+                	for(;$i<$arrlen;$i++) {
+                        	if(@{$arr}[$i] eq $name) {
+                                	splice($arr,$i,1);
+                                	$arrlen--;
+                                	last;
+                        	}
+                	}
+	                if($arrlen<1) { delete $db->{providers}->{$pr}; }
+		}
+	}
 	foreach $file (@files) {
 		if(defined($db->{files}->{$file})) {
 			my $arr = $db->{files}->{$file};
@@ -154,6 +208,7 @@ sub db_removepkg {
 			}
 		}
 	}
+	delete $db->{packages}->{$name};
 }
 sub db_update {
 	writeJSONC($prefix."var/pkg/db.json",$db);
@@ -170,11 +225,13 @@ sub unpack_pkg {
 # COMMANDS
 sub cmd_help {
 	print "\n[ Portable(-ish) Perl PacKaGist 0.1 ]\n";
-	print "Options:\n";
+	print "LOCAL COMMANDS:\n";
 	print "\t-h\t\tHelp\n\t-i [pkg" . $package_ext . "]\tInstall package file\n";
-	print "\t-r [pkg-name]\tRemove package\n\t-l\t\tList installed packages.\n";
+	print "\t-r [pkg-name]\tRemove package\n\t-l\t\tList installed packages\n";
+	print "\nREPOSITORY:\n\t-u\t\tUpdate repo\n\t-d [pkg]\tDownload package\n";
+	print "\t-di [pkg]\tDownload and install package\n\nOPTIONS:\n";
 	print "\t-v\t\tVerbose\n\t-f\t\tForce (unfinished)\n\t\-P [prefix]\tPrefix folder\n";
-	print "\t-C\t\tPrefer compiling.\n";
+	print "\t-C\t\tPrefer compiling\n";
 }
 sub cmd_list {
 	my $i = 0;
@@ -246,9 +303,10 @@ sub cmd_install {
 	print "Reading package...\n";
 	my $package_info = readJSON("info.json");
 	my $pkgname = $package_info->{meta}->{name};
+	if(is_installed($pkgname) && $command ne "reinstall"){ die_error("The package is already installed! Uninstall it first.",11); }
+	check_deps_die($package_info->{meta}->{dependencies});
 	my $pkgdir = $prefix."var/pkg/files/".$pkgname;
 	my $rootdir = $pkgdir."/root";
-	if(-d $rootdir && $command ne "reinstall"){ die_error("The package is already installed! Uninstall it first.",11); }
 	if(!(-d "root") or ($compile==1 and ($package_info->{package}->{script} ne "")))
 	{
 		print "Compiling...\n";
@@ -272,7 +330,6 @@ sub cmd_install {
 	db_addpkg($package_info,@filelist);
 	db_update();
 	print "Package " . $pkgname . " installed!\n";
-	exit(0);
 }
 
 my $argv_len = @ARGV;
@@ -367,19 +424,70 @@ if($command ne "nope")
 	$db = readJSONC($prefix . "var/pkg/db.json");
 	print " complete\n";	
 }
+
 if($command eq "download" || $command eq "di")
 {
-	unless(-f ($prefix . "var/pkg/repo.json")) { die_error("Repo not found!",12); }
-	print "Loading repository...";
-	#$repo = readJSONC($prefix . "var/pkg/repo.json");
-	print " complete\n";
+        unless(-f ($prefix . "var/pkg/repo.json")) { die_error("Repo not found!",12); }
+        print "Loading repository...";
+        $repo = readJSONC($prefix . "var/pkg/repo.json");
+        print " complete\n";
 }
-
-if($command eq "download") {
-
-} elsif($command eq "update") {
-
-} elsif($command eq "install" || $command eq "reinstall") { cmd_install(); }
-elsif($command eq "remove") { cmd_uninstall(); }
-elsif($command eq "list") { cmd_list(); }
-else { die_error("No command specified.\nUse -h for help."); }
+sub process_cmd {
+	if($command eq "download" || $command eq "di")
+	{
+		print "Searching for package '".$package."'...\n";
+		if(exists($repo->{providers}->{$package}))
+		{
+			my @prs = @{$repo->{providers}->{$package}};
+			print "Found in package ".$prs[$#prs]."\n";
+			$package = $prs[$#prs];
+		}
+		if(exists($repo->{packages}->{$package}))
+		{
+			my $deps = $repo->{packages}->{$package}->{meta}->{dependencies};
+			my $fn = $repo->{packages}->{$package}->{filename};
+			if($dep_depth<1) { check_deps_die($deps); }
+			my @deps = check_dependencies($deps);
+			my $dlen = @deps;
+			if($dlen>0)
+			{
+				$dep_depth--;
+				my $oldpkg = $package;
+				foreach $dep (@deps) {
+					my $oldcmd = $command;
+					$package = $dep;
+					process_cmd();
+					$command = $oldcmd;
+				}
+				$package = $oldpkg;
+			}
+			if(is_installed($package)){ die_error("The package is already installed! Uninstall it first.",11); }
+			print "Downloading...\n";
+			if($command eq "di") {
+				$dlprefix = tempdir("/tmp/pkgdl-XXXXXX", CLEANUP => ($verbose>1?0:1)) . "/";
+			}
+			chdir $dlprefix;
+			download_file($config->{repo} . "/" . $repo->{packages}->{$package}->{filename}, $repo->{packages}->{$package}->{filename});
+			print "Downloaded!\n";
+		}
+		else { die_error("Package not found!",14); }
+	}
+	if($command eq "di") {
+		print "Installing...\n";
+		$package = $dlprefix . $repo->{packages}->{$package}->{filename};
+		$command = "install";
+		cmd_install();
+	} elsif($command eq "update") {
+		print "Downloading new repo...\n";
+		download_file($config->{repo} . "/repo.json.gz", $prefix . "var/pkg/repo.json.gz");
+		print "Unpacking...\n";
+		gunzip $prefix . "var/pkg/repo.json.gz" => $prefix . "var/pkg/repo.json"
+			or die_error("Couldn't unpack repo! $GunzipError",4);
+		print "Done!\n";
+	} elsif($command eq "install" || $command eq "reinstall") { cmd_install(); }
+	elsif($command eq "remove") { cmd_uninstall(); }
+	elsif($command eq "list") { cmd_list(); }
+	else { die_error("No command specified.\nUse -h for help."); }
+}
+process_cmd();
+exit(0);

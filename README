@@ -1,1 +1,17 @@
-Quite experimentalicious
+Here's a README.
+
+To get a repo working:
+1. pppkg -h
+2. edit the resulting /etc/pppkg.json
+3. pppkg -u
+
+Some notes:
+"apt-get install" == "pppkg -di"
+"dpkg -i" == "pppkg -i"
+
+To remove a package, pppkg -r.
+To list packages, pppkg -l.
+To download a package, pppkg -d.
+
+-f = force, -v = increase verbosity level, -C = prefer compilation to binaries
+-P [prefix folder] - oh you chrooters you, set the prefix for pppkg's files
