@@ -9,6 +9,10 @@ use File::stat;
 use Cwd;
 use IO::Compress::Gzip;
 
+# USER CONFIG
+my $generate_html = true;
+my $copy_file = true;
+my $copy_file_folder = "repo_files";
 my $repo;
 sub die_error {
 	my $text = shift;
@@ -18,14 +22,25 @@ sub die_error {
 	chdir("/");
 	exit($code);
 }
-sub readJSON {
+sub readText {
 	my $filename = shift;
 	my $f = open(FILE, "<", $filename)
-		or die_error("Could not read JSON file!",5);
+		or die_error("Could not read file!",5);
 	my $fh_text = "";
 	foreach $line (<FILE>) { $fh_text .= $line; };
 	close(FILE);
-	return decode_json($fh_text);
+	return $fh_text;
+}
+sub readJSON {
+	my $filename = shift;
+	return decode_json(readText($filename));
+}
+sub writeText {
+	my ($filename,$data) = @_;
+	my $f = open(FILE, ">", $filename)
+		or die_error("Could not write file!",5);
+	print FILE $data;
+	close(FILE);
 }
 sub writeJSON {
 	my ($filename,$data) = @_;
@@ -49,10 +64,12 @@ sub read_info {
 	chdir $destdir;
 	my $tar = Archive::Tar->new;
 	$tar->read("pkg.tar") or die_error("[TAR] Couldn't read!",1);
-	$tar->extract("info.json") or die_error("[TAR] Couldn't extract!",1);
-	my $tmp = readJSON("info.json");
+	$tar->extract() or die_error("[TAR] Couldn't extract!",1);
 	unlink("pkg.tar");
-	unlink("info.json");
+	my $tmp = readJSON("info.json");
+	mkdir($olddir."/".$copy_file_folder."/".$tmp->{meta}->{name}."/");
+	if($copy_file) { system("mv * ".$olddir."/".$copy_file_folder."/".$tmp->{meta}->{name}."/"); }
+	else { system("rm -rf *"); }
 	chdir $olddir;
 	$tmp->{mtime} = $stat->mtime;
 	$tmp->{filename} = $src;
@@ -70,10 +87,28 @@ sub db_addpkg {
                 }
         }
 }
+sub generate_html {
+	my ($info, $template) = @_;
+	$template =~ s/%PACKAGE%/$info->{meta}->{name}/g;
+	$template =~ s/%URL%/$info->{meta}->{url}/g;
+	$template =~ s/%DESCRIPTION%/$info->{meta}->{description}/g;
+	$template =~ s/%VERSION%/$info->{meta}->{version}/g;
+	$template =~ s/%DEPENDS%/$info->{meta}->{dependencies}/g;
+	$template =~ s/%PROVIDES%/$info->{meta}->{provides}/g;
+	my $files_url = $copy_file_folder . "/" . $info->{meta}->{name} . "/";
+	$template =~ s/%FILES_URL%/$files_url/g;
+	$template =~ s/%PACKAGE_URL%/$info->{filename}/g;
+	return $template;
+}
 $repo = {};
 $repo->{packages} = {};
 $repo->{providers} = {};
-print "pppkg repository generator 0.1\n";
+print "pppkg repository generator 0.2 html edition\ncleaning...";
+
+my $html = "<html><head></head><body>";
+my $html_temp = readText("TEMPLATE.html");
+if(-d $copy_file_folder) { system("rm -rf ".$copy_file_folder); }
+mkdir($copy_file_folder);
 
 $tempdir = tempdir("/tmp/pkgist-repo-gen-XXXXXX", CLEANUP => 1);	
 print "parsing packages...\n";
@@ -84,6 +119,8 @@ foreach $file (@pkgfiles) {
 	$info = read_info($file,$tempdir);
 	$repo->{packages}->{($info->{meta}->{name})} = $info;
 	db_addpkg($info);
+	$html .= generate_html($info,$html_temp);
 }
+writeText("index.html",$html);
 writeJSONC("repo.json.gz",$repo);
 print "done\n";
