@@ -11,6 +11,7 @@ use IO::Compress::Gzip;
 
 # USER CONFIG
 my $generate_html = true;
+my $generate_html_list = true;
 my $copy_file = true;
 my $copy_file_folder = "repo_files";
 my $repo;
@@ -98,17 +99,20 @@ sub generate_html {
 	my $files_url = $copy_file_folder . "/" . $info->{meta}->{name} . "/";
 	$template =~ s/%FILES_URL%/$files_url/g;
 	$template =~ s/%PACKAGE_URL%/$info->{filename}/g;
-	return $template;
+	my $t2 = "<div id=\"".$info->{meta}->{name}."\">".$template."</div>";
+	return $t2;
 }
 $repo = {};
 $repo->{packages} = {};
 $repo->{providers} = {};
 print "pppkg repository generator 0.2 html edition\ncleaning...";
 
-my $html = "<html><head></head><body>";
+my $html = "";
 my $html_temp = readText("TEMPLATE.html");
 if(-d $copy_file_folder) { system("rm -rf ".$copy_file_folder); }
 mkdir($copy_file_folder);
+
+my $html_list = "<div id=\"_filelist\">";
 
 $tempdir = tempdir("/tmp/pkgist-repo-gen-XXXXXX", CLEANUP => 1);	
 print "parsing packages...\n";
@@ -120,7 +124,13 @@ foreach $file (@pkgfiles) {
 	$repo->{packages}->{($info->{meta}->{name})} = $info;
 	db_addpkg($info);
 	$html .= generate_html($info,$html_temp);
+	$html_list .= "<a href=\"#" . $info->{meta}->{name} . "\">" . $info->{meta}->{name} . "</a><br>";
 }
-writeText("index.html",$html);
+$html_list .= "</div>";
+
+$html_final = "<html><head><title>Repository</title></head><body>";
+if($generate_html_list) { $html_final .= $html_list; }
+$html_final .= $html . "</body></html>";
+writeText("index.html",$html_final);
 writeJSONC("repo.json.gz",$repo);
 print "done\n";
