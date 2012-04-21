@@ -54,7 +54,7 @@ sub die_error {
 	exit($code);
 }
 sub hardlink_copy {
-	my ($src, $dest) = @_;
+	my ($src, $dest, $pkgname) = @_;
 	# Screw the Perl ways! Bash on it!
 	open(FILELIST, ">","filelist")
 		or die_error("Cannot create filelist!",8);
@@ -63,6 +63,7 @@ sub hardlink_copy {
 	foreach $file (@files) {
 		print FILELIST $file;
 		$file=~s/\n//g;
+		if($command eq "reinstall" && !db_owns($pkgname,$file)) { next; }
 		if($verbose>=2) { print $dest.$file . "\n"; }
 		if(-f $dest.$file) { unlink $dest.$file; if($command ne "reinstall"){ print "Overwriting " . $file . "!\n"; } }
 		if(-l $src.$file) {
@@ -143,6 +144,13 @@ sub check_deps_die {
 	if($n_dlen>0) { die_error("Resolve dependencies first: ".join(', ',@n_deps),15); }
 }
 # DATABASE
+sub db_owns {
+	my ($name, $filename) = @_;
+	my @arr = @{$db->{files}->{$filename}};
+	my $al = @arr;
+	if($verbose>=2) { print "Checking if ".$arr[$al-1]." equals ".$name." for filename ".$filename."... ".($arr[$al-1] eq $name)."\n"; }
+	return ($arr[$al-1] eq $name);
+}
 sub db_addpkg {
 	my ($info, @filelist) = @_;
 	$pkgname =$info->{meta}->{name};
@@ -224,12 +232,13 @@ sub unpack_pkg {
 }
 # COMMANDS
 sub cmd_help {
-	print "\n[ Portable(-ish) Perl PacKaGist 0.1 ]\n";
+	print "\n[ Portable(-ish) Perl PacKaGist 0.3 ]\n";
 	print "LOCAL COMMANDS:\n";
 	print "\t-h\t\tHelp\n\t-i [pkg" . $package_ext . "]\tInstall package file\n";
 	print "\t-r [pkg-name]\tRemove package\n\t-l\t\tList installed packages\n";
 	print "\nREPOSITORY:\n\t-u\t\tUpdate repo\n\t-d [pkg]\tDownload package\n";
-	print "\t-di [pkg]\tDownload and install package\n\nOPTIONS:\n";
+	print "\t-di [pkg]\tDownload and install package\n\t-dRi [pkg]\tDownload and reinstall package\n";
+	print "\nOPTIONS:\n";
 	print "\t-v\t\tVerbose\n\t-f\t\tForce (unfinished)\n\t\-P [prefix]\tPrefix folder\n";
 	print "\t-C\t\tPrefer compiling\n";
 }
@@ -245,8 +254,8 @@ sub cmd_list {
 }
 sub cmd_uninstall {
 	my $pkgdir = $prefix."var/pkg/files/".$package;
+	if(!is_installed($package)){ die_error("The package is not installed! Install it first.",11); }
 	# Abuse the fact that the filelist is generated during the hardlinking.
-	unless(-e $pkgdir."/filelist"){ die_error("Package " . $package . " isn't installed!"); }
 	print "Removing package " . $package . "...\n";
 	if(defined($package_info->{package}->{preuninstall})) { chdir $pkgdir; exec_script("./" . $package_info->{package}->{preuninstall}); }
 	if($verbose>=2) { print "Reading filelist...\n"; }
@@ -325,7 +334,7 @@ sub cmd_install {
 	unless(-d $rootdir){ die_error("Moving failed: $?",7); }
 	print "Installing files...\n";
 	chdir $pkgdir;
-	my @filelist = hardlink_copy($rootdir."/", $prefix);
+	my @filelist = hardlink_copy($rootdir."/", $prefix, $pkgname);
 	if(defined($package_info->{package}->{postinstall})) { chdir $pkgdir; exec_script("./" . $package_info->{package}->{postinstall}); }
 	db_addpkg($package_info,@filelist);
 	db_update();
@@ -382,6 +391,12 @@ for(;$args<$argv_len;$args++)
 			$package = $ARGV[$args+1];
 			$args++;
 		} else { die_error("Package not specified.",2); }
+        } elsif($ARGV[$args] eq "-dRi") {
+                if($args<($argv_len-1)) {
+                        $command = "dri";
+                        $package = $ARGV[$args+1];
+                        $args++;
+                } else { die_error("Package not specified.",2); }
 	} elsif($ARGV[$args] eq "-l") {
 		$command = "list";
 	} elsif($ARGV[$args] eq "-u") {
@@ -425,7 +440,7 @@ if($command ne "nope")
 	print " complete\n";	
 }
 
-if($command eq "download" || $command eq "di")
+if($command eq "download" || $command eq "di" || $command eq "dri")
 {
         unless(-f ($prefix . "var/pkg/repo.json")) { die_error("Repo not found!",12); }
         print "Loading repository...";
@@ -433,10 +448,10 @@ if($command eq "download" || $command eq "di")
         print " complete\n";
 }
 sub process_cmd {
-	if($command eq "download" || $command eq "di")
+	if($command eq "download" || $command eq "di" || $command eq "dri")
 	{
 		print "Searching for package '".$package."'...\n";
-		if(exists($repo->{providers}->{$package}))
+		if(!exists($repo->{packages}->{$package}) && exists($repo->{providers}->{$package}))
 		{
 			my @prs = @{$repo->{providers}->{$package}};
 			print "Found in package ".$prs[$#prs]."\n";
@@ -461,7 +476,7 @@ sub process_cmd {
 				}
 				$package = $oldpkg;
 			}
-			if(is_installed($package)){ die_error("The package is already installed! Uninstall it first.",11); }
+			if($command ne "dri" && is_installed($package)){ die_error("The package is already installed! Uninstall it first.",11); }
 			print "Downloading...\n";
 			if($command eq "di") {
 				$dlprefix = tempdir("/tmp/pkgdl-XXXXXX", CLEANUP => ($verbose>1?0:1)) . "/";
@@ -477,6 +492,11 @@ sub process_cmd {
 		$package = $dlprefix . $repo->{packages}->{$package}->{filename};
 		$command = "install";
 		cmd_install();
+	} elsif($command eq "dri") {
+                print "Installing...\n";
+                $package = $dlprefix . $repo->{packages}->{$package}->{filename};
+                $command = "reinstall";
+                cmd_install();
 	} elsif($command eq "update") {
 		print "Downloading new repo...\n";
 		download_file($config->{repo} . "/repo.json.gz", $prefix . "var/pkg/repo.json.gz");
